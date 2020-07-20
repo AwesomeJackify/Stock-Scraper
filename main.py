@@ -23,14 +23,15 @@ import sys
 
 # Constants
 TICKER = sys.argv[1].upper()
-DATE = None
+DATE_YAHOO = None
+DATE_SHEETS = None
 
 # If modifying these scopes, delete the file token.pickle.
 SCOPES = ['https://www.googleapis.com/auth/spreadsheets']
 
 # The ID and range of a sample spreadsheet.
 SPREADSHEET_ID = '1D_IO1APspGn-vIc-vvz9EWsdW2TQtVBfvJ2xQgLo6-A'
-RANGE_NAME = 'Multiday Breakout!A3:X3'
+RANGE_NAME = 'Multiday Breakout!A2:X3'
 
 columns = {}
 
@@ -71,8 +72,10 @@ def set_date():
     date = sys.argv[2]
     date_split = date.split('-')
     date_formated = datetime.datetime(int(date_split[2]), int(date_split[1]), int(date_split[0]))
-    global DATE
-    DATE = date_formated.strftime('%b %d, %Y')
+    global DATE_YAHOO
+    global DATE_SHEETS
+    DATE_YAHOO = date_formated.strftime('%b %d, %Y')
+    DATE_SHEETS = date_formated.strftime('%d/%m/%Y')
 
 def check_url(url):
     try:
@@ -94,13 +97,20 @@ def get_data(url, target):
     elif (target == 'statistics'):
         # Get market cap
         regex = re.search('marketCap":{"\w+":\d+,"\w+":"(\d+\.\d+)M"', html_cleanup)
-        columns['market cap'] = regex.group(1)
+        if regex == None:
+            regex = re.search('marketCap":{"\w+":\d+,"\w+":"(\d+\.\d+)B"', html_cleanup)
+            if regex == None:
+                print("Can't find the market cap")
+            else:
+                columns['market cap'] = float(regex.group(1))*1000
+        else:
+            columns['market cap'] = regex.group(1)
 
         # Get float
-        regex = re.search('floatShares":{"\w+":\d+,"f\w+":"(\d+\.\d+)M"', html_cleanup)
+        regex = re.search('floatShares":{"\w+":\d+,"\w+":"(\d+\.?\d+)M"', html_cleanup)
         columns['float'] = regex.group(1)
     elif (target == 'historical'):
-        date_td = html.find('td', text = DATE)
+        date_td = html.find('td', text = DATE_YAHOO)
         date_td_siblings = list(date_td.next_siblings)
 
         # Get prices
@@ -126,17 +136,33 @@ if __name__ == '__main__':
     get_data(statistics_url, 'statistics')
     get_data(historical_url, 'historical')
 
-    values = [
-        [
+    if os.path.exists('token.pickle'):
+        with open('token.pickle', 'rb') as token:
+            creds = pickle.load(token)
+    # If there are no (valid) credentials available, let the user log in.
+    if not creds or not creds.valid:
+        if creds and creds.expired and creds.refresh_token:
+            creds.refresh(Request())
+        else:
+            flow = InstalledAppFlow.from_client_secrets_file(
+                'credentials.json', SCOPES)
+            creds = flow.run_local_server(port=0)
+        # Save the credentials for the next run
+        with open('token.pickle', 'wb') as token:
+            pickle.dump(creds, token)
 
-        ],
+    values = [
+        [DATE_SHEETS, TICKER[:-3], columns['category'], columns['market cap'], columns['float'], None, None, None, None, columns['open'], columns['high'], columns['low'], columns['close']],
     ]
     body = {
         'values': values
     }
+
+    service = build('sheets', 'v4', credentials=creds)
+
     result = service.spreadsheets().values().append(
         spreadsheetId=SPREADSHEET_ID, range=RANGE_NAME,
-        valueInputOption='RAW', body=body).execute()
+        valueInputOption='USER_ENTERED', body=body).execute()
     print('{0} cells appended.'.format(result \
                                            .get('updates') \
                                            .get('updatedCells')))
